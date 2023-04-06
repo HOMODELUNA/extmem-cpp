@@ -15,7 +15,7 @@ namespace ExtMem{
 using byte = uint8_t;
 
 Buffer::Buffer(size_t _buf_size,size_t _block_size):
-    buffer_size(_buf_size),block_size(_block_size),numAllBlk(buffer_size / (block_size + 1))
+    buffer_size(_buf_size),block_size(_block_size),numAllBlk(_buf_size / (_block_size + 1))
 {
     numIO = 0;
     numFreeBlk = numAllBlk;
@@ -25,6 +25,15 @@ Buffer::Buffer(size_t _buf_size,size_t _block_size):
     }
 }
 
+uint8_t* Buffer::available_block_start()const {
+    for(auto blkPtr = data.get(); blkPtr < data.get() + (block_size + 1) * numAllBlk;blkPtr += block_size + 1) {
+        if(*blkPtr == byte(BlockState::AVAILABLE)){
+            return blkPtr+1;
+        }   
+    }
+    return nullptr;
+}
+
 std::optional<Buffer::Block> Buffer::get_block(){
     if (numFreeBlk == 0)
     {
@@ -32,38 +41,30 @@ std::optional<Buffer::Block> Buffer::get_block(){
         return std::nullopt;
     }
 
-    auto blkPtr = data.get();
-
-    while (blkPtr < data.get() + (block_size + 1) * numAllBlk)
-    {
-        if (*blkPtr == byte(BlockState::AVAILABLE))
-            break;
-        else
-            blkPtr += block_size + 1;
+    auto blkPtr = available_block_start();
+    if(!blkPtr){
+        perror("No available buffer!\n");
+        return std::nullopt;
     }
-
-    *blkPtr = byte(BlockState::UNAVAILABLE);
+    *(blkPtr-1) = byte(BlockState::UNAVAILABLE);
     numFreeBlk--;
-    return  std::optional( Block(*this,blkPtr + 1))   ;
+    return  std::optional( Block(*this,blkPtr))   ;
 }
 
 int Buffer::dump_block(Block block , uint64_t addr){
 
     char filename[40];
-    unsigned char *bytePtr;
 
     sprintf(filename, "%d.blk", addr);
-    std::ofstream out = std::ofstream(filename);
+    std::ofstream out = std::ofstream(filename,std::ios::binary);
 
     if (!out)
     {
         perror("Writing Block Failed!\n");
         return -1;
     }
+    out.write((char*)block.data,block_size);
 
-    for (auto c : block){
-        out.put(c);
-    }
         
     numIO++;
     out.close();
@@ -71,49 +72,41 @@ int Buffer::dump_block(Block block , uint64_t addr){
 }
 std::optional<Buffer::Block> Buffer::read_block(uint64_t addr){
     char filename[40];
-    unsigned char *blkPtr, *bytePtr;
-    char ch;
-
-    if (numFreeBlk == 0)
-    {
-        perror("Buffer Overflows!\n");
-        return std::nullopt;
-    }
-
-    blkPtr = data.get();
-
-    while (blkPtr < data.get() + (block_size + 1) * numAllBlk)
-    {
-        if (*blkPtr == byte(BlockState::AVAILABLE))
-            break;
-        else
-            blkPtr += block_size + 1;
-    }
-
     sprintf(filename, "%d.blk", addr);
-    FILE *fp = fopen(filename, "r");
 
-    if (!fp)
-    {
+    
+    
+    std::ifstream in (filename,std::ios::binary);
+
+    if (!in){
         perror("Reading Block Failed!\n");
         return std::nullopt;
     }
-
-    *blkPtr = byte(BlockState::UNAVAILABLE);
-    blkPtr++;
-    bytePtr = blkPtr;
-
-    while ((ch = fgetc(fp)) != EOF && bytePtr < blkPtr + block_size)
-    {
-        *bytePtr = ch;
-        bytePtr++;
+    uint8_t* block_ptr = available_block_start();
+    if(!block_ptr){
+        perror("No available buffer!\n");
+        return std::nullopt;
     }
-
-    fclose(fp);
+    *(block_ptr-1) = byte(BlockState::UNAVAILABLE);
+    in.read((char*)block_ptr,block_size);
+    
     numFreeBlk--;
     numIO++;
-    return std::optional(Block(*this,blkPtr));
+    return std::optional(Block(*this,block_ptr));
 }
 
+void Buffer::Block::backup(uint64_t addr)const{
+    char filename[40];
 
+    sprintf(filename, "%d.blk", addr);
+    std::ofstream out = std::ofstream(filename,std::ios::binary);
+
+    if (!out)
+    {
+        perror("Writing Block Failed!\n");
+    }
+
+    out.write((char*)data,original.block_size);
+    out.close();
+}
 }

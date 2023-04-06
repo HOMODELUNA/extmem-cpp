@@ -11,6 +11,10 @@
 #include <memory>
 #include<optional>
 #include <cstdint>
+#include <exception>
+#include <stdexcept>
+
+#include<iostream>
 namespace ExtMem{
 
 struct Buffer{
@@ -45,12 +49,19 @@ struct Buffer{
     
     const size_t block_size; /* 每个 Block 的大小*/
     protected:
+    //查找一个合适的块指针,如果有,返回之,没有,返回nullptr
+    uint8_t* available_block_start()const;
     const size_t numAllBlk; /* buffer 中总共的块数 */
     unsigned long numIO = 0; /*  IO 的次数*/    
     const size_t buffer_size;
     size_t numFreeBlk; /* Number of available blocks in the buffer */
     std::unique_ptr<uint8_t[]> data; /* Starting address of the buffer */
 };
+namespace detail{
+enum class Unsafe{YES};
+}
+
+constexpr auto UNSAFE = detail::Unsafe::YES;
 enum class BlockState : unsigned char {
     AVAILABLE = 0,
     UNAVAILABLE = 1
@@ -60,11 +71,15 @@ enum class BlockState : unsigned char {
 // 我为了性能考虑,没有把buffer的底层视图变为共享指针.
 struct Buffer::Block{
 
-    Block(Block&&) = default;
+    Block(Block&& rv):original(rv.original){
+        data = rv.data;
+        rv.data = nullptr;
+    }
     Block(const Block&) = delete;//请勿复制Block
     Block& operator=(const Block&) = delete; 
     
     ~Block(){
+        if (data == nullptr){return;}
         *(data-1) = uint8_t(BlockState::AVAILABLE);
         original.numFreeBlk +=1;
     };
@@ -75,12 +90,43 @@ struct Buffer::Block{
     uint8_t& operator[](size_t index){return data[index];}
     uint8_t operator[](size_t index)const{return data[index];}
 
+    //
+    /**
+     * @brief 将它含有的内存视作某某类型的引用
+     * 
+     * 请不要在这里放有需要释放的资源,因为它底下不过是一片未解释的内存
+     * 这个版本会进行运行时大小检查,如果要求的视图多于块的大小,那么会报错
+     * 对无检查的版本,请用 <b> block.view<T,UNSAFE>() </b>
+     * @tparam T 被视作的类型
+     * @return T& 
+     */
+    template<typename T>
+    T & view()const{
+        if(sizeof(T) > size()){
+            throw std::length_error("length exceeded when requiring a view");
+        }
+        return * reinterpret_cast<T*>(begin());
+    }
+
+    template<typename T,detail::Unsafe>
+    T & view()const{
+        return * reinterpret_cast<T*>(begin());
+    }
+    template<typename T,detail::Unsafe>
+    T * ptr()const{
+        return  reinterpret_cast<T*>(begin());
+    }
+    void backup(uint64_t addr)const;
     friend Buffer;
     private : 
-    uint8_t * data;
+    uint8_t * data = nullptr;
     Buffer& original;
     Block(Buffer& _original,uint8_t* _data):original(_original),data(_data){}
 };
+
+
+
+
 
 }
 
@@ -90,18 +136,3 @@ struct Buffer::Block{
 
 
 
-
-
-// unsigned char *getNewBlockInBuffer(Buffer *buf);
-
-// /* Set a block in a buffer to be available. */
-// void freeBlockInBuffer(unsigned char *blk, Buffer *buf);
-
-// /* Drop a block on the disk */
-// int dropBlockOnDisk(unsigned int addr);
-
-// /* Read a block from the hard disk to the buffer by the address of the block. */
-// unsigned char *readBlockFromDisk(unsigned int addr, Buffer *buf);
-
-// /* Read a block in the buffer to the hard disk by the address of the block. */
-// int writeBlockToDisk(unsigned char *blkPtr, unsigned int addr, Buffer *buf);

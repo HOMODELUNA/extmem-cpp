@@ -1,7 +1,8 @@
+add_includedirs("./")
 target("extmem")
 	set_languages("c++17")
 	set_kind("static")
-	add_includedirs("./")
+	add_includedirs("./",{public=true})
 	add_files("./extmem.cpp")
 
 target("test-extmem")
